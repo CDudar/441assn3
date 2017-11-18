@@ -159,7 +159,7 @@ public class FastFtp {
 			}
 
 
-			//if(nextSeqNum < base + windowSize)
+
 			
 			Segment send = new Segment(nextSequenceNumber, payLoad);
 			System.out.println("Sending packet " + nextSequenceNumber + " of size " + send.getLength());
@@ -241,19 +241,24 @@ public class FastFtp {
 	
 		
 		
-		if((ackNum < base) || (ackNum > base + windowSize)) {
+		if(queue.element() == null) {
 			//do nothing
+		}
+		
+		else if((ackNum < queue.element().getSeqNum()) || (ackNum > queue.element().getSeqNum() + windowSize)) {
+			
+			System.out.println(ackNum + " IS ACK");
 			
 		}
 		else {
 			
-
 			base = queue.element().getSeqNum();
 			
 			timeoutHandler.cancel();
 			
 			for(int i = base; i < ackNum; i++) {
 				try {
+					System.out.println("Removing " + i );
 					queue.remove();
 				} catch (InterruptedException e) {
 					e.printStackTrace();

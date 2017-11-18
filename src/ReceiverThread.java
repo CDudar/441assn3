@@ -32,7 +32,7 @@ public class ReceiverThread extends Thread {
 			Segment receivedSeg = new Segment(packet);
 			
 			master.processACK(receivedSeg);
-			
+			System.out.println("returned from process ack");
 			
 			
 			} catch (IOException e) {
