@@ -24,14 +24,14 @@ public class ReceiverThread extends Thread {
 		while(notTerminated){
 
 			try {
-			byte[] buf = new byte[1000];
+			System.out.println("Receiving ACKS");
+				
+			byte[] buf = new byte[4];
 			DatagramPacket packet = new DatagramPacket(buf, buf.length);
 			udpSocket.receive(packet);
 			Segment receivedSeg = new Segment(packet);
 			
-			System.out.println("Received seq +" + receivedSeg.getSeqNum());
-			
-
+			master.processACK(receivedSeg);
 			
 			
 			
@@ -45,5 +45,10 @@ public class ReceiverThread extends Thread {
 		
 		
 	}
+	
+	void setNotTerminated(boolean notTerminated){
+		this.notTerminated = notTerminated;
+	}
+	
 	
 }

@@ -31,8 +31,15 @@ public class FastFtp {
 	
 	
 	DatagramSocket udpSocket;
+	Socket tcpSocket;
 	DataInputStream inputStream;
 	DataOutputStream outputStream;
+	
+	File file;
+	long fileSize;
+	
+	Timer timer;
+	TimeOutHandler timeoutHandler;
 	
 	TxQueue queue;
 
@@ -64,16 +71,17 @@ public class FastFtp {
 	public void send(String serverName, int serverPort, String fileName) {
 		// to be completed
 		
+		//System.out.println("SENDINGINGGINGONGGO");
 		
 		try {
-			Socket socket = new Socket(serverName, serverPort);
-			outputStream = new DataOutputStream(socket.getOutputStream());
-			inputStream = new DataInputStream(socket.getInputStream());
+			tcpSocket = new Socket(serverName, serverPort);
+			outputStream = new DataOutputStream(tcpSocket.getOutputStream());
+			inputStream = new DataInputStream(tcpSocket.getInputStream());
 			
 			udpSocket = new DatagramSocket(5555);
 			
-			File file = new File("fileName");
-			Long fileSize = file.length();
+			file = new File(fileName);
+			fileSize = file.length();
 			
 			outputStream.writeUTF(fileName);
 			outputStream.writeLong(fileSize);
@@ -82,8 +90,20 @@ public class FastFtp {
 			
 			serverUDPPortNumber = inputStream.readInt();
 			
-			udpSocket.connect(InetAddress.getByName(null), serverUDPPortNumber);
+			
+			
+			inputStream.close();
+			outputStream.close();
+			
+			System.out.println("Received port number " + serverUDPPortNumber );
+			udpSocket.connect(tcpSocket.getInetAddress(), serverUDPPortNumber);
+			
+			System.out.println("udpSocket local address " +udpSocket.getLocalAddress());
+			System.out.println("udpSocket listening on " + udpSocket.getLocalPort());
 		
+			System.out.println("udpSocket connected to " + udpSocket.getPort());
+
+			
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
@@ -92,23 +112,22 @@ public class FastFtp {
 		ReceiverThread receiver = new ReceiverThread(this, udpSocket);
 		receiver.start();
 		
-		queue = new TxQueue(10);
+		queue = new TxQueue(windowSize);
 		
 		
 		FileInputStream fis = null;
-		long contentLength = 0;
 		try {
 			
-			File file = new File(fileName);
-			
-			contentLength = file.length();
-			
-			fis = new FileInputStream(new File(fileName));
+			System.out.println("Sending file " + file.getName());
+			System.out.println("File content length: " + fileSize + " bytes");
+			fis = new FileInputStream(file);
 			
 			
 			
 			
-		} catch (IOException e) {
+		} 
+		
+			catch (IOException e) {
 			e.printStackTrace();
 		}
 		
@@ -116,45 +135,90 @@ public class FastFtp {
 		int counter = 0;
 		int numBytesRead = 0;
 		
+		System.out.println("About to send file");
+		
 		while(numBytesRead != -1){
 			
-			if(counter == contentLength){
+
+			
+			if(counter == fileSize){
 				break;
 			}
-			
+	
 			byte[] payLoad = new byte[1000];
-			
+			if(fileSize - counter < 1000) {
+				payLoad = new byte[(int)fileSize - counter];
+			}
 
+			
 			try {
 				numBytesRead = fis.read(payLoad);
+				
 			} catch (IOException e) {
 				e.printStackTrace();
 			}
 
 
+			//if(nextSeqNum < base + windowSize)
+			
 			Segment send = new Segment(nextSequenceNumber, payLoad);
+			System.out.println("Sending packet " + nextSequenceNumber + " of size " + send.getLength());
+			
+			nextSequenceNumber++;
 			
 			while(queue.isFull()){
-				//setup wait
+				Thread.yield();
 			}
 
-			processSend(send);
+			processSend(send, false);
 			
 			counter += numBytesRead;
 			
+			System.out.println("Counter is currently at: " + counter);
+			
+			System.out.println("numBytesRead is currently at:" + numBytesRead);
+			
+			
+			
+		}
+		
+		System.out.println("All packets sent");
+		
+		System.out.println("Waiting for un-acked packets to be confirmed");
+		
+		while(!(queue.isEmpty()))
+				{Thread.yield();	}
+		
+		
+		System.out.println("Queue is empty, all packets acked");
+		
+		receiver.setNotTerminated(false);
+		timer.cancel();
+		
+		System.out.println("Closing file input stream, udp socket, tcp socket");
+		try {
+			fis.close();
+			udpSocket.close();
+			tcpSocket.close();
+			
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
 		}
 		
 		
 		
 	}
 	
-	public synchronized void processSend(Segment seg){
-		
+	public synchronized void processSend(Segment seg, boolean retransmission){	
 		try {
 			DatagramPacket packet = new DatagramPacket(seg.getBytes(), seg.getBytes().length);
 			udpSocket.send(packet);
+			
+			if(!retransmission) {
 			queue.add(seg);
-		
+			}
+			
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
@@ -162,9 +226,10 @@ public class FastFtp {
 			e.printStackTrace();
 		}
 		
-		if(seg.getSeqNum() == 0){
-			Timer timer = new Timer(true);
-			timer.schedule(new TimeOutHandler(), 1000);
+		if(queue.size() == 1){
+			timer = new Timer(true);
+			timeoutHandler = new TimeOutHandler(this);
+			timer.schedule(timeoutHandler, rtoTimer);
 		}
 		
 	}
@@ -172,9 +237,59 @@ public class FastFtp {
 	public synchronized void processACK(Segment ack){
 		System.out.println("Received seq +" + ack.getSeqNum());
 		
+		int ackNum = ack.getSeqNum();
+	
 		
 		
+		if((ackNum < base) || (ackNum > base + windowSize)) {
+			//do nothing
+			
+		}
+		else {
+			
+
+			base = queue.element().getSeqNum();
+			
+			timeoutHandler.cancel();
+			
+			for(int i = base; i < ackNum; i++) {
+				try {
+					queue.remove();
+				} catch (InterruptedException e) {
+					e.printStackTrace();
+				}
+				
+			}
+			
+			
+			
+			if(! queue.isEmpty()){
+				timeoutHandler = new TimeOutHandler(this);
+				timer.schedule(timeoutHandler, rtoTimer);
+			}
+			
+			
+		}
 		
+	}
+	
+	public synchronized void processTimeout() {
+		//resend all packets in window
+		
+		System.out.println("Retransmitting");
+		
+		Segment[] pendingSegments = queue.toArray();
+		System.out.println("queue has " + pendingSegments.length + " elements");
+		
+		for(int i = 0; i < pendingSegments.length; i++) {
+			System.out.println("sending " + pendingSegments[i].getSeqNum());
+			processSend(pendingSegments[i], true);
+		}
+		
+		if(! queue.isEmpty()){
+			timeoutHandler = new TimeOutHandler(this);
+			timer.schedule(timeoutHandler, rtoTimer);
+		}
 	}
 	
 	
